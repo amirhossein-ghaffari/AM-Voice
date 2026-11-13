@@ -20,6 +20,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Download Persian small offline model
+        run: |
+          curl -fL --retry 3 "https://alphacephei.com/vosk/models/vosk-model-small-fa-0.42.zip" -o /tmp/vosk-fa.zip
+          unzip -q /tmp/vosk-fa.zip -d /tmp/vosk-fa
+          mkdir -p app/src/main/assets/vosk-model
+          cp -a /tmp/vosk-fa/vosk-model-small-fa-0.42/. app/src/main/assets/vosk-model/
+          test -f app/src/main/assets/vosk-model/conf/model.conf
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
       - uses: actions/upload-artifact@v4
