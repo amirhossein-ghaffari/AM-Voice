@@ -112,9 +112,9 @@ class VoiceService : Service() {
                 if (audio.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
                     throw IllegalStateException("Microphone did not enter RECORDSTATE_RECORDING")
                 }
-                emit("status", "Listening. Say: Hello AM")
+                emit("status", "Listening. Say: AM AM")
                 emit("debug", "MIC: recording started successfully")
-                updateNotification("Listening for: Hello AM")
+                updateNotification("Listening for: AM AM")
                 val buffer = ByteArray(4096)
 
                 while (running && !Thread.currentThread().isInterrupted) {
@@ -123,6 +123,12 @@ class VoiceService : Service() {
                     if (count == 0) continue
 
                     val now = System.currentTimeMillis()
+                    if (wakeUntil > 0L && now > wakeUntil) {
+                        wakeUntil = 0L
+                        emit("wake", "idle")
+                        emit("status", "Listening. Say: AM AM")
+                        updateNotification("Listening for: AM AM")
+                    }
                     val rms = calculateRms(buffer, count)
                     if (now - lastLevelLogAt > 3000) {
                         emit("debug", "MIC: input active; RMS=${"%.1f".format(Locale.US, rms)}")
@@ -179,10 +185,11 @@ class VoiceService : Service() {
             "hi am", "hi a m"
         )
         if (wakePhrases.any { normalizedWakeText.contains(normalizeForMatch(it)) }) {
-            wakeUntil = now + 12000
-            emit("status", "I'm awake. Give me a command.")
+            wakeUntil = now + 15000
+            emit("wake", "awake")
+            emit("status", "AM is awake — speak now")
             emit("heard", "Wake word detected: $text")
-            emit("debug", "WAKE: accepted; command window=12s; wake response is silent to prevent microphone feedback")
+            emit("debug", "WAKE: accepted; command window=15s; visual awake indicator enabled; silent wake")
             updateNotification("Awake - waiting for command")
             // Do not speak here: the live microphone would recognize the assistant's own voice.
             return
@@ -195,6 +202,7 @@ class VoiceService : Service() {
         }
 
         wakeUntil = 0L
+        emit("wake", "idle")
         emit("heard", "Command: $text")
         emit("debug", "COMMAND: dispatching '$text'")
         updateNotification("Command: $text")
@@ -202,9 +210,10 @@ class VoiceService : Service() {
     }
 
     private fun executeCommand(text: String) {
+        val callMatch = Regex("^(?:please\\s+)?(?:call|phone|dial)\\s+(?:to\\s+)?(.+)$").find(text)
         when {
-            text.startsWith("call ") || text.startsWith("phone ") || text.startsWith("dial ") ->
-                callContact(text.removePrefix("call ").removePrefix("phone ").removePrefix("dial ").trim())
+            callMatch != null ->
+                callContact(callMatch.groupValues[1].trim())
             text.contains("open chrome") || text.contains("launch chrome") -> openApp("com.android.chrome", "Chrome")
             text.contains("open whatsapp") || text.contains("launch whatsapp") -> openApp("com.whatsapp", "WhatsApp")
             text.contains("open telegram") || text.contains("launch telegram") -> openApp("org.telegram.messenger", "Telegram")
@@ -248,8 +257,14 @@ class VoiceService : Service() {
             .replace(Regex("\\s+"), " ")
             .trim()
 
-    private fun callContact(query: String) {
+    private fun callContact(rawQuery: String) {
+        // Speech recognizers sometimes transcribe "to" as "two" in phrases like "call to Dad".
+        val query = normalizeForMatch(rawQuery)
+            .replace(Regex("^(?:to|two)\\s+"), "")
+            .replace(Regex("^(?:my|the)\\s+"), "")
+            .trim()
         if (query.isBlank()) { speak("Please say the contact name after call"); return }
+        emit("debug", "CONTACT: searching for normalized name '$query'")
         if (checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
             emit("status", "Contacts permission missing. Enable Contacts permission in app settings.")
             emit("debug", "CONTACT: READ_CONTACTS denied")
@@ -283,9 +298,12 @@ class VoiceService : Service() {
             speak("I could not search contacts"); return
         }
         val unique = found.distinctBy { it.second }
-        val q = normalizeForMatch(query)
+        val q = query
         val exact = unique.filter { normalizeForMatch(it.first) == q }
-        val matches = if (exact.isNotEmpty()) exact else unique.filter { normalizeForMatch(it.first).contains(q) }
+        val matches = if (exact.isNotEmpty()) exact else unique.filter { name ->
+            val candidate = normalizeForMatch(name.first)
+            candidate.contains(q) || q.split(" ").all { token -> candidate.split(" ").any { it.startsWith(token) } }
+        }
         when (matches.size) {
             0 -> {
                 emit("status", "No contact found for " + query)
