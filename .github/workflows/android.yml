@@ -20,18 +20,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Download Persian small offline model
+      - name: Download English US small offline model
         run: |
-          curl -fL --retry 3 "https://alphacephei.com/vosk/models/vosk-model-small-fa-0.42.zip" -o /tmp/vosk-fa.zip
-          unzip -q /tmp/vosk-fa.zip -d /tmp/vosk-fa
+          curl -fL --retry 3 "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip" -o /tmp/vosk-en.zip
+          unzip -q /tmp/vosk-en.zip -d /tmp/vosk-en
           mkdir -p app/src/main/assets/vosk-model
-          cp -a /tmp/vosk-fa/vosk-model-small-fa-0.42/. app/src/main/assets/vosk-model/
-          test -f app/src/main/assets/vosk-model/conf/model.conf
+          cp -a /tmp/vosk-en/vosk-model-small-en-us-0.15/. app/src/main/assets/vosk-model/
+          test -s app/src/main/assets/vosk-model/am/final.mdl
+          test -s app/src/main/assets/vosk-model/conf/mfcc.conf
+          echo "English Vosk model verified"
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: AM-Voice-debug-apk
+          name: AM-Voice-English-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
