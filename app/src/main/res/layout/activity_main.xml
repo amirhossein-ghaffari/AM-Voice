@@ -78,7 +78,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="TEST SEQUENCE\n1. Say: Hello AM\n2. Wait for: I'm awake\n3. Say: Open Chrome\n\nOther commands: Open Camera • Open WhatsApp • Open Telegram • Open Settings • Turn on flashlight • Turn off flashlight • Volume up • Volume down • What time is it • Stop listening"
+            android:text="TEST SEQUENCE\n1. Say: Hello AM\n2. Wait for: I'm awake\n3. Say: Open Chrome\n\nOther commands: Call John • Open Camera • Open WhatsApp • Open Telegram • Open YouTube • Open Instagram • Open Gmail • Open Maps • Open Spotify • Open Calculator • Open app [name] • Open Settings • Flashlight on/off • Volume up/down • What time is it • Stop listening"
             android:textColor="#D7E0EF"
             android:textSize="13sp"
             android:lineSpacingExtra="4dp"
