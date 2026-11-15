@@ -33,6 +33,7 @@
             android:layout_marginTop="26dp"
             android:background="@drawable/bg_panel">
             <TextView
+                android:id="@+id/wakeOrb"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:gravity="center"
@@ -40,12 +41,23 @@
                 android:textColor="#00D9FF"
                 android:textSize="82sp" />
         </FrameLayout>
+        <TextView
+            android:id="@+id/wakeLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="SAY “AM AM” TO WAKE"
+            android:textColor="#AAB7CC"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.08"
+            android:layout_marginTop="10dp" />
 
         <TextView
             android:id="@+id/statusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Assistant ready"
+            android:text="Assistant ready — say AM AM"
             android:textColor="#F4F8FF"
             android:textSize="19sp"
             android:gravity="center"
@@ -54,7 +66,7 @@
             android:id="@+id/heardText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Press start, then say: Hello AM"
+            android:text="Press start, then say: AM AM"
             android:textColor="#AAB7CC"
             android:textSize="14sp"
             android:gravity="center"
@@ -78,7 +90,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="TEST SEQUENCE\n1. Say: Hello AM\n2. Wait for: I'm awake\n3. Say: Open Chrome\n\nOther commands: Call John • Open Camera • Open WhatsApp • Open Telegram • Open YouTube • Open Instagram • Open Gmail • Open Maps • Open Spotify • Open Calculator • Open app [name] • Open Settings • Flashlight on/off • Volume up/down • What time is it • Stop listening"
+            android:text="TEST SEQUENCE\n1. Say: AM AM\n2. Wait for the green pulsing orb\n3. Say: Open Chrome or Call Dad\n\nCall commands: Call Dad • Call to Dad • Phone Dad • Dial Dad\nOther commands: Open Camera • Open Camera • Open WhatsApp • Open Telegram • Open YouTube • Open Instagram • Open Gmail • Open Maps • Open Spotify • Open Calculator • Open app [name] • Open Settings • Flashlight on/off • Volume up/down • What time is it • Stop listening"
             android:textColor="#D7E0EF"
             android:textSize="13sp"
             android:lineSpacingExtra="4dp"
