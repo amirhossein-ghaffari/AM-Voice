@@ -6,6 +6,10 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.provider.ContactsContract
+import android.net.Uri
+import android.Manifest
 import android.hardware.camera2.CameraManager
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -193,9 +197,20 @@ class VoiceService : Service() {
 
     private fun executeCommand(text: String) {
         when {
+            text.startsWith("call ") || text.startsWith("phone ") || text.startsWith("dial ") ->
+                callContact(text.removePrefix("call ").removePrefix("phone ").removePrefix("dial ").trim())
             text.contains("open chrome") || text.contains("launch chrome") -> openApp("com.android.chrome", "Chrome")
             text.contains("open whatsapp") || text.contains("launch whatsapp") -> openApp("com.whatsapp", "WhatsApp")
             text.contains("open telegram") || text.contains("launch telegram") -> openApp("org.telegram.messenger", "Telegram")
+            text.contains("open youtube") || text.contains("launch youtube") -> openAppByName("YouTube")
+            text.contains("open instagram") || text.contains("launch instagram") -> openAppByName("Instagram")
+            text.contains("open gmail") || text.contains("launch gmail") -> openAppByName("Gmail")
+            text.contains("open maps") || text.contains("launch maps") -> openAppByName("Maps")
+            text.contains("open spotify") || text.contains("launch spotify") -> openAppByName("Spotify")
+            text.contains("open calculator") || text.contains("launch calculator") -> openAppByName("Calculator")
+            text.contains("open gallery") || text.contains("launch gallery") || text.contains("open photos") -> openAppByName("Gallery")
+            text.startsWith("open app ") || text.startsWith("launch app ") ->
+                openAppByName(text.removePrefix("open app ").removePrefix("launch app ").trim())
             text.contains("open camera") || text.contains("launch camera") -> launch(Intent("android.media.action.IMAGE_CAPTURE"), "Camera")
             text.contains("open settings") || text.contains("settings") -> launch(Intent(Settings.ACTION_SETTINGS), "Settings")
             text.contains("wifi") || text.contains("wi-fi") -> launch(Intent(Settings.Panel.ACTION_WIFI), "Wi-Fi panel")
@@ -211,11 +226,126 @@ class VoiceService : Service() {
                 speak("Stopping")
                 stopSelf()
             }
+            text.startsWith("open ") || text.startsWith("launch ") ->
+                openAppByName(text.removePrefix("open ").removePrefix("launch ").trim())
             else -> {
                 emit("status", "I heard you, but this command is not supported.")
                 emit("debug", "COMMAND: no matching rule for '$text'")
                 speak("Sorry, I don't know that command yet")
             }
+        }
+    }
+
+    private fun normalizeForMatch(value: String): String =
+        value.lowercase(Locale.US).replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
+
+    private fun callContact(query: String) {
+        if (query.isBlank()) { speak("Please say the contact name after call"); return }
+        if (checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+            emit("status", "Contacts permission missing. Enable Contacts permission in app settings.")
+            emit("debug", "CONTACT: READ_CONTACTS denied")
+            speak("Please allow contacts permission in app settings")
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
+            emit("status", "Phone permission missing. Enable Phone permission in app settings.")
+            emit("debug", "CALL: CALL_PHONE denied")
+            speak("Please allow phone permission in app settings")
+            return
+        }
+        val found = mutableListOf<Pair<String, String>>()
+        try {
+            val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER)
+            contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI, projection,
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " LIKE ?", arrayOf("%" + query + "%"),
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " COLLATE NOCASE ASC"
+            )?.use { cursor ->
+                val ni = cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                val pi = cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(ni).orEmpty()
+                    val number = cursor.getString(pi).orEmpty()
+                    if (name.isNotBlank() && number.isNotBlank()) found.add(name to number)
+                }
+            }
+        } catch (e: Exception) {
+            emit("debug", "CONTACT QUERY ERROR: " + e.javaClass.simpleName + ": " + e.message)
+            speak("I could not search contacts"); return
+        }
+        val unique = found.distinctBy { it.second }
+        val q = normalizeForMatch(query)
+        val exact = unique.filter { normalizeForMatch(it.first) == q }
+        val matches = if (exact.isNotEmpty()) exact else unique.filter { normalizeForMatch(it.first).contains(q) }
+        when (matches.size) {
+            0 -> {
+                emit("status", "No contact found for " + query)
+                emit("debug", "CONTACT: no match; raw results=" + found.size)
+                speak("I could not find " + query)
+            }
+            1 -> {
+                val (name, number) = matches.first()
+                emit("status", "Calling " + name)
+                emit("debug", "CALL: unique contact " + name + ", number ending " + number.takeLast(3))
+                try {
+                    val call = Intent(Intent.ACTION_CALL, Uri.fromParts("tel", number, null))
+                    call.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(call)
+                    speak("Calling " + name)
+                } catch (e: Exception) {
+                    emit("debug", "CALL FAILED: " + e.javaClass.simpleName + ": " + e.message)
+                    speak("I could not start the call")
+                }
+            }
+            else -> {
+                emit("status", "Multiple matches: " + matches.map { it.first }.distinct().take(4).joinToString() + ". Say the full name.")
+                emit("debug", "CONTACT: ambiguous matches=" + matches.size + "; call not placed")
+                speak("More than one contact matches. Please say the full name")
+            }
+        }
+    }
+
+    private fun openAppByName(requestedName: String) {
+        if (requestedName.isBlank()) { speak("Please say the app name"); return }
+        try {
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val installed = packageManager.queryIntentActivities(intent, 0)
+            val apps = installed.mapNotNull { info ->
+                val label = info.loadLabel(packageManager)?.toString()?.trim().orEmpty()
+                val pkg = info.activityInfo?.packageName.orEmpty()
+                if (label.isNotBlank() && pkg.isNotBlank()) label to pkg else null
+            }.distinctBy { it.second }
+            val q = normalizeForMatch(requestedName)
+            val exact = apps.filter { normalizeForMatch(it.first) == q }
+            val matches = if (exact.isNotEmpty()) exact else apps.filter { normalizeForMatch(it.first).contains(q) }
+            when (matches.size) {
+                0 -> {
+                    emit("status", "Installed app not found: " + requestedName)
+                    emit("debug", "APP SEARCH: no match for " + requestedName + "; launchable apps=" + apps.size)
+                    speak("I could not find the app " + requestedName)
+                }
+                1 -> {
+                    val (label, pkg) = matches.first()
+                    val launch = packageManager.getLaunchIntentForPackage(pkg)
+                    if (launch == null) {
+                        emit("debug", "APP SEARCH: launch intent missing for " + label)
+                        speak("I found " + label + " but cannot open it")
+                    } else {
+                        emit("debug", "APP SEARCH: matched " + label + " package=" + pkg)
+                        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(launch)
+                        speak("Opening " + label)
+                    }
+                }
+                else -> {
+                    emit("status", "Several apps match: " + matches.take(5).joinToString { it.first } + ". Say a more exact name.")
+                    emit("debug", "APP SEARCH: ambiguous " + requestedName + "; matches=" + matches.size)
+                    speak("Several apps match. Please be more specific")
+                }
+            }
+        } catch (e: Exception) {
+            emit("debug", "APP SEARCH ERROR: " + e.javaClass.simpleName + ": " + e.message)
+            speak("I could not search installed apps")
         }
     }
 
