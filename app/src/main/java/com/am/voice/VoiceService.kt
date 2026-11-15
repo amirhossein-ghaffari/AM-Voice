@@ -171,14 +171,20 @@ class VoiceService : Service() {
 
     private fun processRecognized(text: String) {
         val now = System.currentTimeMillis()
-        val wakePhrase = listOf("hello am", "hey am", "hi am", "hello a m", "hey a m")
-        if (wakePhrase.any { text.contains(it) }) {
-            wakeUntil = now + 10000
+        val normalizedWakeText = normalizeForMatch(text)
+        val wakePhrases = listOf(
+            "am am", "a m a m",
+            "hey am", "hey a m",
+            "hello am", "hello a m",
+            "hi am", "hi a m"
+        )
+        if (wakePhrases.any { normalizedWakeText.contains(normalizeForMatch(it)) }) {
+            wakeUntil = now + 12000
             emit("status", "I'm awake. Give me a command.")
             emit("heard", "Wake word detected: $text")
-            emit("debug", "WAKE: accepted; command window=10s")
+            emit("debug", "WAKE: accepted; command window=12s; wake response is silent to prevent microphone feedback")
             updateNotification("Awake - waiting for command")
-            speak("I'm listening")
+            // Do not speak here: the live microphone would recognize the assistant's own voice.
             return
         }
 
@@ -237,7 +243,10 @@ class VoiceService : Service() {
     }
 
     private fun normalizeForMatch(value: String): String =
-        value.lowercase(Locale.US).replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
+        value.lowercase(Locale.ROOT)
+            .replace(Regex("[^\\p{L}\\p{N} ]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
 
     private fun callContact(query: String) {
         if (query.isBlank()) { speak("Please say the contact name after call"); return }
