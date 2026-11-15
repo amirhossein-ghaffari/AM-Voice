@@ -1,64 +1,341 @@
 package com.am.voice
-import android.app.*
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
 import android.content.Intent
-import android.media.*
 import android.hardware.camera2.CameraManager
-import android.os.*
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.os.Build
+import android.os.IBinder
 import android.provider.Settings
-import android.speech.tts.TextToSpeech
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
 import java.io.File
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
 import kotlin.concurrent.thread
-class VoiceService:Service(){
- companion object{const val ACTION_START="com.am.voice.START";private const val CHANNEL="am_voice_channel";private const val NID=7001}
- @Volatile private var running=false
- private var worker:Thread?=null;private var recorder:AudioRecord?=null;private var model:Model?=null;private var recognizer:Recognizer?=null
- private var wakeUntil=0L;private var tts:TextToSpeech?=null
- override fun onCreate(){super.onCreate();val ch=NotificationChannel(CHANNEL,"AM Voice",NotificationManager.IMPORTANCE_LOW);getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
- startForeground(NID,notification("آماده شنیدن سلام AM"));tts=TextToSpeech(this){s->if(s==TextToSpeech.SUCCESS)tts?.language=Locale("fa","IR")}}
- override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{if(!running)startListening();return START_STICKY}
- private fun startListening(){running=true;worker=thread(name="AMVoiceAudio"){
- try{
- val dir=File(filesDir,"vosk-model")
- if(!File(dir,"conf/model.conf").exists()){copyAssets("vosk-model",dir)}
- if(!File(dir,"conf/model.conf").exists())throw IllegalStateException("مدل فارسی در APK نیست")
- model=Model(dir.absolutePath);recognizer=Recognizer(model,16000f)
- val min=AudioRecord.getMinBufferSize(16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT)
- recorder=AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,maxOf(min,8192))
- if(recorder?.state!=AudioRecord.STATE_INITIALIZED)throw IllegalStateException("میکروفون آماده نیست")
- recorder?.startRecording();update("در انتظار: سلام AM");val buffer=ByteArray(4096)
- while(running&&!Thread.currentThread().isInterrupted){val n=recorder?.read(buffer,0,buffer.size)?:-1;if(n>0&&recognizer?.acceptWaveForm(buffer,n)==true){val heard=JSONObject(recognizer!!.result).optString("text").lowercase(Locale.ROOT);if(heard.isNotBlank())process(heard)}}
- }catch(e:Exception){update("خطا: ${e.message}");stopSelf()}finally{try{recorder?.stop()}catch(_:Exception){};recorder?.release();recorder=null;recognizer?.close();recognizer=null;model?.close();model=null}
- }}
- private fun copyAssets(src:String,dst:File){val names=assets.list(src)?:return;if(names.isEmpty()){dst.parentFile?.mkdirs();assets.open(src).use{i->dst.outputStream().use{o->i.copyTo(o)}}}else{dst.mkdirs();names.forEach{copyAssets("$src/$it",File(dst,it))}}}
- private fun process(s:String){val now=System.currentTimeMillis();if(s.contains("سلام")&&(s.contains("ام")||s.contains("ای ام"))){wakeUntil=now+9000;update("بیدار شدم؛ فرمانت را بگو");say("بله، گوش می‌کنم");return};if(now>wakeUntil)return;wakeUntil=0;update("فرمان: $s");command(s)}
- private fun command(s:String){when{
- s.contains("کروم")||s.contains("chrome")->open("com.android.chrome","کروم")
- s.contains("واتساپ")||s.contains("whatsapp")->open("com.whatsapp","واتساپ")
- s.contains("تلگرام")||s.contains("telegram")->open("org.telegram.messenger","تلگرام")
- s.contains("دوربین")->launch(Intent("android.media.action.IMAGE_CAPTURE"),"دوربین")
- s.contains("تنظیمات")->launch(Intent(Settings.ACTION_SETTINGS),"تنظیمات")
- s.contains("وای فای")||s.contains("وایفای")->launch(Intent(Settings.Panel.ACTION_WIFI),"پنل وای‌فای")
- s.contains("چراغ")&&s.contains("روشن")->torch(true)
- s.contains("چراغ")&&s.contains("خاموش")->torch(false)
- s.contains("صدا")&&s.contains("کم")->volume(-1)
- s.contains("صدا")&&s.contains("زیاد")->volume(1)
- s.contains("ساعت")->say("ساعت "+SimpleDateFormat("HH:mm",Locale("fa","IR")).format(Date()))
- s.contains("توقف")||s.contains("خداحافظ")->stopSelf()
- else->say("این فرمان را هنوز بلد نیستم")
- }}
- private fun open(pkg:String,label:String){val i=packageManager.getLaunchIntentForPackage(pkg);if(i==null){say("$label نصب نیست");return};i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);startActivity(i);say("$label باز شد")}
- private fun launch(i:Intent,label:String){try{i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);startActivity(i);say("$label باز شد")}catch(_:Exception){say("امکان باز کردن $label نیست")}}
- private fun torch(on:Boolean){try{val cm=getSystemService(CAMERA_SERVICE) as CameraManager;val id=cm.cameraIdList.firstOrNull{cm.getCameraCharacteristics(it).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE)==true}?:return say("چراغ‌قوه موجود نیست");cm.setTorchMode(id,on);say(if(on)"چراغ روشن شد" else "چراغ خاموش شد")}catch(_:Exception){say("کنترل چراغ‌قوه ممکن نیست")}}
- private fun volume(d:Int){val a=getSystemService(AUDIO_SERVICE) as AudioManager;a.adjustStreamVolume(AudioManager.STREAM_MUSIC,if(d>0)AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,AudioManager.FLAG_SHOW_UI);say("صدا تغییر کرد")}
- private fun say(s:String){update(s);val e=tts?:return;val v=e.voice;if(v?.locale?.language=="fa"&&v.isNetworkConnectionRequired.not())e.speak(s,TextToSpeech.QUEUE_FLUSH,null,"am${System.currentTimeMillis()}")}
- private fun notification(s:String):Notification{val pi=PendingIntent.getActivity(this,0,Intent(this,MainActivity::class.java),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE);return NotificationCompat.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.ic_btn_speak_now).setContentTitle("AM Voice").setContentText(s).setContentIntent(pi).setOngoing(true).build()}
- private fun update(s:String){getSystemService(NotificationManager::class.java).notify(NID,notification(s))}
- override fun onDestroy(){running=false;worker?.interrupt();try{recorder?.stop()}catch(_:Exception){};tts?.stop();tts?.shutdown();super.onDestroy()}
- override fun onBind(i:Intent?):IBinder?=null
+import kotlin.math.sqrt
+
+class VoiceService : Service() {
+    companion object {
+        const val ACTION_START = "com.am.voice.START"
+        const val ACTION_EVENT = "com.am.voice.EVENT"
+        const val EXTRA_TYPE = "type"
+        const val EXTRA_MESSAGE = "message"
+        private const val CHANNEL = "am_voice_channel"
+        private const val NOTIFICATION_ID = 7001
+        private const val SAMPLE_RATE = 16000
+    }
+
+    @Volatile private var running = false
+    @Volatile private var wakeUntil = 0L
+    private var worker: Thread? = null
+    @Volatile private var recorder: AudioRecord? = null
+    private var model: Model? = null
+    private var recognizer: Recognizer? = null
+    private var tts: android.speech.tts.TextToSpeech? = null
+    private var lastPartialAt = 0L
+    private var lastLevelLogAt = 0L
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        startForeground(NOTIFICATION_ID, notification("Starting AM Voice"))
+        tts = android.speech.tts.TextToSpeech(this) { result ->
+            val ready = result == android.speech.tts.TextToSpeech.SUCCESS
+            emit("debug", "TTS initialization: " + if (ready) "ready" else "failed")
+            if (ready) {
+                val language = tts?.setLanguage(Locale.US)
+                emit("debug", "TTS English language result=$language (speech output is optional)")
+            }
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!running) startListening()
+        return START_NOT_STICKY
+    }
+
+    private fun startListening() {
+        running = true
+        emit("state", "running")
+        emit("status", "Loading English offline model...")
+        emit("debug", "SERVICE: startListening()")
+        worker = thread(name = "AMVoiceAudio") {
+            try {
+                val modelDir = File(filesDir, "vosk-model-en")
+                val marker = File(modelDir, "am/final.mdl")
+                if (!marker.exists()) {
+                    emit("debug", "MODEL: copying assets to ${modelDir.absolutePath}")
+                    copyAssets("vosk-model", modelDir)
+                }
+                if (!marker.exists()) {
+                    throw IllegalStateException("English model missing: am/final.mdl not found in assets/vosk-model")
+                }
+                emit("debug", "MODEL: files found; creating Vosk model")
+                model = Model(modelDir.absolutePath)
+                recognizer = Recognizer(model, SAMPLE_RATE.toFloat())
+                emit("debug", "MODEL: Vosk recognizer ready (en-US, 16 kHz)")
+
+                val minBuffer = AudioRecord.getMinBufferSize(
+                    SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+                )
+                if (minBuffer <= 0) throw IllegalStateException("AudioRecord minBufferSize error=$minBuffer")
+                val bufferSize = maxOf(minBuffer * 2, 8192)
+                emit("debug", "MIC: minBuffer=$minBuffer, buffer=$bufferSize")
+                val audio = AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize
+                )
+                recorder = audio
+                emit("debug", "MIC: AudioRecord state=${audio.state}")
+                if (audio.state != AudioRecord.STATE_INITIALIZED) {
+                    throw IllegalStateException("AudioRecord initialization failed (state=${audio.state})")
+                }
+                audio.startRecording()
+                if (audio.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    throw IllegalStateException("Microphone did not enter RECORDSTATE_RECORDING")
+                }
+                emit("status", "Listening. Say: Hello AM")
+                emit("debug", "MIC: recording started successfully")
+                updateNotification("Listening for: Hello AM")
+                val buffer = ByteArray(4096)
+
+                while (running && !Thread.currentThread().isInterrupted) {
+                    val count = audio.read(buffer, 0, buffer.size)
+                    if (count < 0) throw IllegalStateException("Microphone read failed: AudioRecord error=$count")
+                    if (count == 0) continue
+
+                    val now = System.currentTimeMillis()
+                    val rms = calculateRms(buffer, count)
+                    if (now - lastLevelLogAt > 3000) {
+                        emit("debug", "MIC: input active; RMS=${"%.1f".format(Locale.US, rms)}")
+                        lastLevelLogAt = now
+                    }
+
+                    val activeRecognizer = recognizer ?: throw IllegalStateException("Recognizer unexpectedly null")
+                    if (activeRecognizer.acceptWaveForm(buffer, count)) {
+                        val text = JSONObject(activeRecognizer.result).optString("text").trim().lowercase(Locale.US)
+                        emit("debug", if (text.isBlank()) "VOSK FINAL: (empty)" else "VOSK FINAL: $text")
+                        if (text.isNotBlank()) processRecognized(text)
+                    } else if (now - lastPartialAt > 450) {
+                        val partial = JSONObject(activeRecognizer.partialResult).optString("partial").trim()
+                        if (partial.isNotBlank()) {
+                            emit("heard", "Recognizing: $partial")
+                            emit("debug", "VOSK PARTIAL: $partial")
+                            lastPartialAt = now
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                emit("status", "ERROR: ${e.message ?: e.javaClass.simpleName}")
+                emit("debug", "EXCEPTION: ${e.javaClass.name}: ${e.message}")
+                e.stackTrace.take(5).forEach { emit("debug", " at $it") }
+                running = false
+                emit("state", "stopped")
+                stopSelf()
+            } finally {
+                releaseAudioAndVosk()
+            }
+        }
+    }
+
+    private fun calculateRms(bytes: ByteArray, count: Int): Double {
+        var sum = 0.0
+        var samples = 0
+        var i = 0
+        while (i + 1 < count) {
+            val value = ((bytes[i + 1].toInt() shl 8) or (bytes[i].toInt() and 0xff)).toShort().toInt()
+            sum += value.toDouble() * value.toDouble()
+            samples++
+            i += 2
+        }
+        return if (samples == 0) 0.0 else sqrt(sum / samples)
+    }
+
+    private fun processRecognized(text: String) {
+        val now = System.currentTimeMillis()
+        val wakePhrase = listOf("hello am", "hey am", "hi am", "hello a m", "hey a m")
+        if (wakePhrase.any { text.contains(it) }) {
+            wakeUntil = now + 10000
+            emit("status", "I'm awake. Give me a command.")
+            emit("heard", "Wake word detected: $text")
+            emit("debug", "WAKE: accepted; command window=10s")
+            updateNotification("Awake - waiting for command")
+            speak("I'm listening")
+            return
+        }
+
+        if (now > wakeUntil) {
+            emit("debug", "IGNORED: outside wake window: $text")
+            emit("heard", "Heard (not activated): $text")
+            return
+        }
+
+        wakeUntil = 0L
+        emit("heard", "Command: $text")
+        emit("debug", "COMMAND: dispatching '$text'")
+        updateNotification("Command: $text")
+        executeCommand(text)
+    }
+
+    private fun executeCommand(text: String) {
+        when {
+            text.contains("open chrome") || text.contains("launch chrome") -> openApp("com.android.chrome", "Chrome")
+            text.contains("open whatsapp") || text.contains("launch whatsapp") -> openApp("com.whatsapp", "WhatsApp")
+            text.contains("open telegram") || text.contains("launch telegram") -> openApp("org.telegram.messenger", "Telegram")
+            text.contains("open camera") || text.contains("launch camera") -> launch(Intent("android.media.action.IMAGE_CAPTURE"), "Camera")
+            text.contains("open settings") || text.contains("settings") -> launch(Intent(Settings.ACTION_SETTINGS), "Settings")
+            text.contains("wifi") || text.contains("wi-fi") -> launch(Intent(Settings.Panel.ACTION_WIFI), "Wi-Fi panel")
+            text.contains("turn on flashlight") || text.contains("flashlight on") -> setTorch(true)
+            text.contains("turn off flashlight") || text.contains("flashlight off") -> setTorch(false)
+            text.contains("volume up") || text.contains("increase volume") -> changeVolume(true)
+            text.contains("volume down") || text.contains("decrease volume") -> changeVolume(false)
+            text.contains("what time") || text == "time" || text.contains("tell me the time") -> {
+                val time = SimpleDateFormat("h:mm a", Locale.US).format(Date())
+                speak("It is $time")
+            }
+            text.contains("stop listening") || text == "stop" || text.contains("goodbye") -> {
+                speak("Stopping")
+                stopSelf()
+            }
+            else -> {
+                emit("status", "I heard you, but this command is not supported.")
+                emit("debug", "COMMAND: no matching rule for '$text'")
+                speak("Sorry, I don't know that command yet")
+            }
+        }
+    }
+
+    private fun copyAssets(source: String, destination: File) {
+        val children = assets.list(source) ?: emptyArray()
+        if (children.isEmpty()) {
+            destination.parentFile?.mkdirs()
+            assets.open(source).use { input -> destination.outputStream().use { output -> input.copyTo(output) } }
+        } else {
+            destination.mkdirs()
+            children.forEach { child -> copyAssets("$source/$child", File(destination, child)) }
+        }
+    }
+
+    private fun openApp(packageName: String, label: String) {
+        val intent = packageManager.getLaunchIntentForPackage(packageName)
+        if (intent == null) {
+            emit("debug", "APP: package not installed or not visible: $packageName")
+            speak("$label is not installed")
+            return
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
+        speak("Opening $label")
+    }
+
+    private fun launch(intent: Intent, label: String) {
+        try {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            speak("Opening $label")
+        } catch (e: Exception) {
+            emit("debug", "INTENT: $label failed: ${e.javaClass.simpleName}: ${e.message}")
+            speak("Cannot open $label")
+        }
+    }
+
+    private fun setTorch(enabled: Boolean) {
+        try {
+            val camera = getSystemService(CAMERA_SERVICE) as CameraManager
+            val id = camera.cameraIdList.firstOrNull {
+                camera.getCameraCharacteristics(it).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            }
+            if (id == null) {
+                speak("No flashlight found")
+                return
+            }
+            camera.setTorchMode(id, enabled)
+            speak(if (enabled) "Flashlight on" else "Flashlight off")
+        } catch (e: Exception) {
+            emit("debug", "TORCH: ${e.javaClass.simpleName}: ${e.message}")
+            speak("Flashlight control failed")
+        }
+    }
+
+    private fun changeVolume(up: Boolean) {
+        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+        audio.adjustStreamVolume(
+            AudioManager.STREAM_MUSIC,
+            if (up) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
+            AudioManager.FLAG_SHOW_UI
+        )
+        speak(if (up) "Volume up" else "Volume down")
+    }
+
+    private fun speak(message: String) {
+        emit("status", message)
+        val engine = tts ?: return
+        engine.speak(message, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "am-${System.currentTimeMillis()}")
+    }
+
+    private fun emit(type: String, message: String) {
+        android.util.Log.i("AMVoice", "$type: $message")
+        sendBroadcast(Intent(ACTION_EVENT).setPackage(packageName).putExtra(EXTRA_TYPE, type).putExtra(EXTRA_MESSAGE, message))
+        if (type == "status") updateNotification(message)
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(CHANNEL, "AM Voice", NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    private fun notification(message: String): Notification {
+        val open = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setContentTitle("AM Voice")
+            .setContentText(message)
+            .setContentIntent(open)
+            .setOngoing(true)
+            .build()
+    }
+
+    private fun updateNotification(message: String) {
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(message))
+    }
+
+    private fun releaseAudioAndVosk() {
+        try { recorder?.stop() } catch (_: Exception) { }
+        try { recorder?.release() } catch (_: Exception) { }
+        recorder = null
+        try { recognizer?.close() } catch (_: Exception) { }
+        recognizer = null
+        try { model?.close() } catch (_: Exception) { }
+        model = null
+    }
+
+    override fun onDestroy() {
+        running = false
+        emit("state", "stopped")
+        try { recorder?.stop() } catch (_: Exception) { }
+        worker?.interrupt()
+        try { tts?.stop(); tts?.shutdown() } catch (_: Exception) { }
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
 }
