@@ -17,6 +17,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
@@ -49,11 +50,15 @@ class VoiceService : Service() {
     private var tts: android.speech.tts.TextToSpeech? = null
     private var lastPartialAt = 0L
     private var lastLevelLogAt = 0L
+    private var lastWakePartialAt = 0L
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var pendingContactMatches: List<Pair<String, String>> = emptyList()
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, notification("Starting AM Voice"))
+        try { wakeLock = (getSystemService(POWER_SERVICE) as PowerManager).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AMVoice::Mic").apply { setReferenceCounted(false); acquire() } } catch (_: Exception) { }
         tts = android.speech.tts.TextToSpeech(this) { result ->
             val ready = result == android.speech.tts.TextToSpeech.SUCCESS
             emit("debug", "TTS initialization: " + if (ready) "ready" else "failed")
@@ -66,7 +71,7 @@ class VoiceService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!running) startListening()
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private fun startListening() {
@@ -146,6 +151,17 @@ class VoiceService : Service() {
                             emit("heard", "Recognizing: $partial")
                             emit("debug", "VOSK PARTIAL: $partial")
                             lastPartialAt = now
+                            val p = normalizeForMatch(partial)
+                            if ((p.contains("am am") || p.contains("i am am") || p.contains("a m a m")) && now - lastWakePartialAt > 1200) {
+                                lastWakePartialAt = now
+                                if (wakeUntil < now) {
+                                    wakeUntil = now + 18000
+                                    emit("wake", "awake")
+                                    emit("status", "AM IS AWAKE — SPEAK NOW")
+                                    emit("debug", "WAKE: early partial match; 18s command window")
+                                    updateNotification("AM awake - waiting for command")
+                                }
+                            }
                         }
                     }
                 }
@@ -210,6 +226,16 @@ class VoiceService : Service() {
     }
 
     private fun executeCommand(text: String) {
+        val choice = normalizeForMatch(text)
+        if (pendingContactMatches.isNotEmpty()) {
+            val selected = when (choice) { "first", "the first", "one", "number one" -> 0; "second", "the second", "two", "number two" -> 1; else -> -1 }
+            if (selected >= 0 && selected < pendingContactMatches.size) {
+                val item = pendingContactMatches[selected]
+                pendingContactMatches = emptyList()
+                placeContactCall(item.first, item.second)
+                return
+            }
+        }
         val callMatch = Regex("^(?:please\\s+)?(?:call|phone|dial)\\s+(?:to\\s+)?(.+)$").find(text)
         when {
             callMatch != null ->
@@ -312,23 +338,33 @@ class VoiceService : Service() {
             }
             1 -> {
                 val (name, number) = matches.first()
-                emit("status", "Calling " + name)
-                emit("debug", "CALL: unique contact " + name + ", number ending " + number.takeLast(3))
-                try {
-                    val call = Intent(Intent.ACTION_CALL, Uri.fromParts("tel", number, null))
-                    call.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(call)
-                    speak("Calling " + name)
-                } catch (e: Exception) {
-                    emit("debug", "CALL FAILED: " + e.javaClass.simpleName + ": " + e.message)
-                    speak("I could not start the call")
-                }
+                placeContactCall(name, number)
             }
             else -> {
-                emit("status", "Multiple matches: " + matches.map { it.first }.distinct().take(4).joinToString() + ". Say the full name.")
-                emit("debug", "CONTACT: ambiguous matches=" + matches.size + "; call not placed")
-                speak("More than one contact matches. Please say the full name")
+                pendingContactMatches = matches.take(2)
+                val first = pendingContactMatches[0].first
+                val second = pendingContactMatches.getOrNull(1)?.first ?: "none"
+                emit("status", "First: " + first + " • Second: " + second + ". Say first or second.")
+                emit("debug", "CONTACT: ambiguous matches=" + matches.size + "; voice choice available")
+                speak("First: " + first + ". Second: " + second + ". Say first or second")
             }
+        }
+    }
+
+    private fun placeContactCall(name: String, number: String) {
+        if (checkSelfPermission(Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
+            emit("status", "Call permission is not granted")
+            speak("Please grant phone permission first")
+            return
+        }
+        try {
+            val call = Intent(Intent.ACTION_CALL, Uri.fromParts("tel", number, null)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(call)
+            emit("status", "Calling " + name)
+            speak("Calling " + name)
+        } catch (e: Exception) {
+            emit("debug", "CALL FAILED: " + e.javaClass.simpleName + ": " + e.message)
+            speak("I could not start the call")
         }
     }
 
@@ -491,6 +527,8 @@ class VoiceService : Service() {
         try { recorder?.stop() } catch (_: Exception) { }
         worker?.interrupt()
         try { tts?.stop(); tts?.shutdown() } catch (_: Exception) { }
+        try { wakeLock?.release() } catch (_: Exception) { }
+        wakeLock = null
         super.onDestroy()
     }
 
