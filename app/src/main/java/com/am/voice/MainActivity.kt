@@ -9,6 +9,9 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.widget.TextView
+import android.provider.ContactsContract
+import android.net.Uri
+import android.provider.Settings
 import android.view.View
 import android.animation.ObjectAnimator
 import android.animation.Animator
@@ -25,6 +28,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var start: TextView
     private lateinit var wakeOrb: TextView
     private lateinit var wakeLabel: TextView
+    private lateinit var inventoryText: TextView
     private var wakeAnimator: ObjectAnimator? = null
     private var listening = false
 
@@ -55,6 +59,13 @@ class MainActivity : AppCompatActivity() {
         start = findViewById(R.id.startButton)
         wakeOrb = findViewById(R.id.wakeOrb)
         wakeLabel = findViewById(R.id.wakeLabel)
+        inventoryText = findViewById(R.id.inventoryText)
+        findViewById<TextView>(R.id.reviewButton).setOnClickListener { reviewDeviceInfo() }
+        findViewById<TextView>(R.id.overlayButton).setOnClickListener {
+            if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this)) {
+                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + packageName)))
+            } else status.text = "Overlay permission already enabled"
+        }
         renderWakeState(false)
         start.setOnClickListener {
             if (listening) stopAssistant()
@@ -75,6 +86,25 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
     }
 
+    private fun reviewDeviceInfo() {
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps = packageManager.queryIntentActivities(launcher, 0)
+            .mapNotNull { it.loadLabel(packageManager)?.toString()?.trim() }
+            .filter { it.isNotBlank() }.distinct().sorted()
+        val contacts = mutableListOf<String>()
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            contentResolver.query(ContactsContract.Contacts.CONTENT_URI, arrayOf(ContactsContract.Contacts.DISPLAY_NAME), null, null, ContactsContract.Contacts.DISPLAY_NAME + " COLLATE NOCASE ASC")?.use { c ->
+                val ix = c.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
+                while (c.moveToNext()) c.getString(ix)?.trim()?.takeIf { it.isNotBlank() }?.let { contacts.add(it) }
+            }
+        }
+        inventoryText.text = "INSTALLED APPS (" + apps.size + ")\\n" + apps.take(100).joinToString(" • ") +
+            "\\n\\nCONTACTS (" + (if (granted) contacts.distinct().size.toString() else "permission needed") + ")\\n" +
+            (if (granted) contacts.distinct().take(100).joinToString(" • ") else "Grant Contacts permission to review contacts.")
+        status.text = "Review complete. Only permitted device information is shown."
+    }
+
     private fun hasPermissions(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
@@ -90,7 +120,7 @@ class MainActivity : AppCompatActivity() {
         listening = true
         renderButton()
         status.text = "Starting English speech engine..."
-        heard.text = "Say: Hello AM"
+        heard.text = "Say: AM AM"
         appendDebug("UI: start requested")
     }
 
